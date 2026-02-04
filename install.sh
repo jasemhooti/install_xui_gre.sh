@@ -1,11 +1,8 @@
 #!/bin/bash
 
 # اسکریپت راه‌اندازی تونل UDP-based با WireGuard برای اتصال دو پنل X-UI
-# ساخته شده توسط Grok برای جاسم - نسخه 1.1 (فوریه 2026)
-# این اسکریپت روی Ubuntu 20.04+ کار می‌کنه. پیش‌نیازها رو نصب می‌کنه و تونل site-to-site می‌سازه.
-# برای استفاده: curl -O https://raw.githubusercontent.com/USERNAME/REPO/main/setup-tunnel.sh && bash setup-tunnel.sh
-# جایگزین USERNAME/REPO با گیت‌هاب خودت کن.
-# تغییرات جدید: اضافه کردن گزینه خام کردن سرور قبل از شروع (حذف تونل‌های قدیمی، باز کردن پورت‌ها، رفع فایروال)
+# نسخه 1.2 - بدون پیام needrestart و هشدار کرنل
+# برای استفاده: curl -Ls https://raw.githubusercontent.com/jasemhooti/install_xui_gre.sh/main/install.sh | bash
 
 # رنگ‌ها برای خروجی زیبا
 RED='\033[0;31m'
@@ -22,19 +19,179 @@ fi
 # بروزرسانی سیستم و نصب پیش‌نیازها
 echo -e "${YELLOW}بروزرسانی سیستم و نصب پیش‌نیازها...${NC}"
 sudo apt update -y && sudo apt upgrade -y
-sudo apt install -y curl wget wireguard resolvconf jq ufw  # اضافه کردن ufw برای فایروال
+sudo apt install -y curl wget wireguard resolvconf jq ufw
+
+# غیرفعال کردن needrestart برای جلوگیری از نمایش پیام کرنل
+echo -e "${YELLOW}غیرفعال کردن هشدارهای needrestart...${NC}"
+sudo systemctl mask needrestart.service 2>/dev/null || true
+sudo systemctl stop needrestart.service 2>/dev/null || true
 
 # گزینه خام کردن سرور
-echo -e "${GREEN}سلام جاسم! این اسکریپت تونل WireGuard (UDP-based) رو راه‌اندازی می‌کنه.${NC}"
-echo -e "${GREEN}تونل بین سرور ایران (با پنل X-UI برای ساخت کانفیگ) و سرور خارج (برای دسترسی به اینترنت آزاد) ساخته می‌شه.${NC}"
-echo -e "${GREEN}ترافیک کاربران از ایران به خارج هدایت می‌شه.${NC}"
+echo -e "${GREEN}سلام! این اسکریپت تونل WireGuard رو بین سرور ایران و خارج راه‌اندازی می‌کنه.${NC}"
 echo ""
-echo -e "${YELLOW}آیا می‌خوای سرور رو خام کنی (حذف تونل‌های قدیمی WireGuard، باز کردن پورت‌های لازم مثل 51820/UDP و SSH، رفع مشکلات فایروال، و uninstall X-UI اگر نصب باشه)؟${NC}"
-echo -e "${YELLOW}اگر y بزنی، سرور رو تمیز می‌کنه و آماده نصب جدید می‌شه. اگر n، مستقیم می‌ره به تنظیمات.${NC}"
+echo -e "${YELLOW}آیا می‌خوای سرور رو کامل ریست و تمیز کنی؟${NC}"
+echo -e "${YELLOW}(حذف تونل‌های قدیمی، uninstall WireGuard و X-UI، باز کردن پورت‌ها)${NC}"
 read -p "(y/n): " reset_server
 
 if [[ $reset_server == "y" || $reset_server == "Y" ]]; then
     echo -e "${YELLOW}خام کردن سرور...${NC}"
+    
+    # حذف تونل‌های قدیمی
+    wg-quick down wg0 &> /dev/null
+    systemctl disable wg-quick@wg0 &> /dev/null
+    rm -rf /etc/wireguard/*
+    
+    # uninstall WireGuard
+    sudo apt purge wireguard wireguard-tools -y &> /dev/null
+    sudo apt autoremove -y &> /dev/null
+    
+    # uninstall X-UI / 3X-UI
+    if command -v x-ui &> /dev/null; then
+        x-ui uninstall
+        rm -rf /usr/local/x-ui/
+    fi
+    
+    # تنظیم فایروال
+    sudo ufw --force reset
+    sudo ufw allow 22/tcp
+    sudo ufw allow 51820/udp
+    sudo ufw --force enable
+    sudo ufw reload
+    
+    echo -e "${GREEN}سرور تمیز شد.${NC}"
+else
+    echo -e "${GREEN}ریست رد شد. ادامه...${NC}"
+fi
+
+# نصب 3X-UI اگر وجود نداشته باشد
+if ! command -v x-ui &> /dev/null; then
+    echo -e "${YELLOW}نصب پنل 3X-UI...${NC}"
+    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+    x-ui default
+fi
+
+# پرسیدن نوع سرور
+echo ""
+echo -e "${YELLOW}روی کدوم سرور هستی؟${NC}"
+echo "1) سرور ایران (پنل اصلی)"
+echo "2) سرور خارج (اینترنت آزاد)"
+read -p "انتخاب (1 یا 2): " server_type
+
+if [[ $server_type != 1 && $server_type != 2 ]]; then
+    echo -e "${RED}انتخاب اشتباه!${NC}"
+    exit 1
+fi
+
+# ساخت کلیدها
+private_key_file="/etc/wireguard/private.key"
+public_key_file="/etc/wireguard/public.key"
+
+mkdir -p /etc/wireguard
+if [ ! -f "$private_key_file" ]; then
+    echo -e "${YELLOW}ساخت کلید WireGuard...${NC}"
+    wg genkey | tee "$private_key_file" | wg pubkey > "$public_key_file"
+    chmod 600 "$private_key_file"
+fi
+
+my_private_key=$(cat "$private_key_file")
+my_public_key=$(cat "$public_key_file")
+
+echo -e "${GREEN}کلید عمومی این سرور (کپی کن برای سرور مقابل):${NC}"
+echo "$my_public_key"
+
+# دریافت اطلاعات سرور مقابل
+if [ $server_type -eq 1 ]; then
+    echo -e "${YELLOW}اطلاعات سرور خارج:${NC}"
+    read -p "IP سرور خارج: " foreign_ip
+    read -p "کلید عمومی سرور خارج: " foreign_public_key
+    read -p "پورت WireGuard (پیش‌فرض 51820): " wg_port
+    wg_port=${wg_port:-51820}
+    
+    read -p "دامنه می‌خوای استفاده کنی؟ (y/n): " use_domain
+    if [[ $use_domain == "y" || $use_domain == "Y" ]]; then
+        read -p "دامنه سرور خارج: " foreign_domain
+        endpoint="$foreign_domain:$wg_port"
+    else
+        endpoint="$foreign_ip:$wg_port"
+    fi
+    
+    my_wg_ip="10.66.66.2/32"
+    peer_wg_ip="10.66.66.1/32"
+    
+else
+    echo -e "${YELLOW}اطلاعات سرور ایران:${NC}"
+    read -p "IP سرور ایران: " iran_ip
+    read -p "کلید عمومی سرور ایران: " iran_public_key
+    read -p "پورت WireGuard (پیش‌فرض 51820): " wg_port
+    wg_port=${wg_port:-51820}
+    
+    my_wg_ip="10.66.66.1/32"
+    peer_wg_ip="10.66.66.2/32"
+    endpoint=""
+fi
+
+# ساخت کانفیگ WireGuard
+wg_config="/etc/wireguard/wg0.conf"
+
+if [ $server_type -eq 1 ]; then
+    cat <<EOL > "$wg_config"
+[Interface]
+Address = $my_wg_ip
+PrivateKey = $my_private_key
+
+[Peer]
+PublicKey = $foreign_public_key
+AllowedIPs = 0.0.0.0/0
+Endpoint = $endpoint
+PersistentKeepalive = 25
+EOL
+else
+    cat <<EOL > "$wg_config"
+[Interface]
+Address = $my_wg_ip
+PrivateKey = $my_private_key
+ListenPort = $wg_port
+
+[Peer]
+PublicKey = $iran_public_key
+AllowedIPs = $peer_wg_ip
+EOL
+fi
+
+# فعال‌سازی تونل
+echo -e "${YELLOW}فعال کردن تونل...${NC}"
+wg-quick down wg0 &> /dev/null
+wg-quick up wg0
+systemctl enable wg-quick@wg0
+
+# چک وضعیت
+if wg show wg0 &> /dev/null; then
+    echo -e "${GREEN}تونل فعال شد!${NC}"
+    wg show wg0
+else
+    echo -e "${RED}مشکل در فعال‌سازی تونل. فایروال و پورت‌ها را چک کن.${NC}"
+    exit 1
+fi
+
+# تنظیم X-UI (فقط روی ایران)
+if [ $server_type -eq 1 ]; then
+    echo -e "${YELLOW}تنظیم X-UI برای هدایت ترافیک به تونل...${NC}"
+    config_file="/usr/local/x-ui/bin/config.json"
+    
+    if [ -f "$config_file" ]; then
+        jq '.outbounds += [{"protocol": "freedom", "settings": {"domainStrategy": "AsIs"}, "tag": "direct-to-foreign"}]' "$config_file" > temp.json && mv temp.json "$config_file"
+        jq '.routing.rules += [{"type": "field", "outboundTag": "direct-to-foreign", "network": "udp,tcp"}]' "$config_file" > temp.json && mv temp.json "$config_file"
+        x-ui restart
+        echo -e "${GREEN}تنظیم X-UI انجام شد.${NC}"
+    else
+        echo -e "${YELLOW}فایل کانفیگ X-UI پیدا نشد. تنظیم دستی انجام بده.${NC}"
+    fi
+fi
+
+echo -e "${GREEN}نصب تمام شد!${NC}"
+echo -e "${GREEN}تست: روی ایران بزن → ping 10.66.66.1${NC}"
+echo -e "${GREEN}وضعیت: wg show wg0${NC}"
+echo -e "${GREEN}فایروال: sudo ufw status${NC}"    echo -e "${YELLOW}خام کردن سرور...${NC}"
     
     # حذف تونل‌های قدیمی WireGuard
     wg-quick down wg0 &> /dev/null
