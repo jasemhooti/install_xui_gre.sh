@@ -6,7 +6,7 @@
 # │ هدف: سرور ایران → تونل → سرور خارج → اینترنت آزاد                       │
 # │ کاربران به IP ایران وصل می‌شن، اما ترافیک از خارج می‌ره                 │
 # │                                                                            │
-# │ اجرا: bash <(curl -Ls https://raw.githubusercontent.com/USERNAME/REPO/main/tunnel-xui-setup.sh) │
+# │ اجرا: bash <(curl -Ls https://raw.githubusercontent.com/jasemhooti/install_xui_gre.sh/main/install.sh.sh) │
 # └────────────────────────────────────────────────────────────────────────────┘
 
 set -e  # اگر خطایی رخ داد اسکریپت متوقف بشه
