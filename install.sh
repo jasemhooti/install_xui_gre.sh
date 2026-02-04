@@ -6,7 +6,7 @@
 # │ هدف: سرور ایران → تونل → سرور خارج → اینترنت آزاد                       │
 # │ کاربران به IP ایران وصل می‌شن، اما ترافیک از خارج می‌ره                 │
 # │                                                                            │
-# │ اجرا: bash <(curl -Ls https://raw.githubusercontent.com/jasemhooti/install_xui_gre.sh/main/install.sh.sh) │
+# │ اجرا: bash <(curl -Ls https://raw.githubusercontent.com/USERNAME/REPO/main/tunnel-xui-setup.sh) │
 # └────────────────────────────────────────────────────────────────────────────┘
 
 set -e  # اگر خطایی رخ داد اسکریپت متوقف بشه
@@ -28,14 +28,16 @@ echo "║      خوش آمدید! اسکریپت تونل + X-UI              �
 echo "╚════════════════════════════════════════════════════╝"
 echo ""
 
-# بروزرسانی سیستم
-echo "📦 در حال بروزرسانی پکیج‌های سیستم..."
-apt update -y && apt upgrade -y
+# فقط بروزرسانی لیست پکیج‌ها (بدون ارتقای کل سیستم - سریع‌تره)
+echo "📦 تازه کردن لیست پکیج‌ها (update) - بدون ارتقای کامل سیستم..."
+apt update -y
 
-# نصب WireGuard
+# نصب WireGuard اگر نباشه
 if ! command -v wg &> /dev/null; then
     echo "📡 نصب WireGuard (پروتکل تونل سریع و امن)..."
     apt install wireguard -y
+else
+    echo "✅ WireGuard قبلاً نصب بوده، رد می‌شیم."
 fi
 
 # تولید کلیدها
@@ -99,25 +101,22 @@ EOF
     wg-quick up $WG_INTERFACE
     systemctl enable wg-quick@$WG_INTERFACE
 
-    # فعال کردن IP Forwarding (برای هدایت ترافیک)
+    # فعال کردن IP Forwarding
     echo "فعال کردن IP Forwarding..."
     echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     sysctl -p
 
-    # نصب X-UI (نسخه alireza0 که پایدار است)
+    # نصب X-UI
     echo ""
     echo "🚀 در حال نصب پنل X-UI روی سرور ایران..."
-    echo "بعد از نصب، مرورگر رو باز کن و به http://IP-سرور:54321 برو"
-    echo "نام کاربری و رمز پیش‌فرض: admin / admin  → حتماً عوض کن!"
+    echo "بعد از نصب → http://IP-سرور:54321   (admin / admin - حتما عوض کن)"
     bash <(curl -Ls https://raw.githubusercontent.com/alireza0/x-ui/master/install.sh)
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "نکته خیلی مهم برای هدایت ترافیک Xray از تونل:"
-    echo "1. توی پنل X-UI برو به بخش تنظیمات Xray (Config)"
-    echo "2. توی outbounds یک outbound جدید بساز از نوع freedom"
-    echo "3. یا مستقیم AllowedIPs رو روی 0.0.0.0/0 تنظیم کن و از wg0 استفاده کن"
-    echo "4. یا از routing rules استفاده کن تا ترافیک خاص از wg0 بره"
+    echo "نکته: برای هدایت ترافیک Xray از تونل WireGuard:"
+    echo "در پنل X-UI → تنظیمات Xray → outbound freedom بساز"
+    echo "یا از routing استفاده کن تا ترافیک از wg0 بره"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 elif [[ "$server_type" == "2" ]]; then
@@ -126,7 +125,7 @@ elif [[ "$server_type" == "2" ]]; then
     # └─────────────────────────────┘
     echo ""
     echo "🌐 شما روی سرور خارج هستید (Server)"
-    echo "این سرور منتظر اتصال از سرور ایران است."
+    echo "این سرور منتظر اتصال از ایران است."
 
     read -p "IP عمومی سرور ایران را وارد کن: " peer_ip
     read -p "پورت WireGuard (پیش‌فرض 51820): " wg_port
@@ -149,33 +148,30 @@ EOF
     wg-quick up $WG_INTERFACE
     systemctl enable wg-quick@$WG_INTERFACE
 
-    # فعال کردن IP Forwarding + NAT (MASQUERADE) برای خروج ترافیک
+    # IP Forwarding + NAT
     echo "فعال کردن IP Forwarding و NAT..."
     echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
     sysctl -p
 
-    # پیدا کردن رابط اصلی اینترنت (معمولاً eth0 یا ens3 یا enp1s0)
     MAIN_IFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)
-    if [ -z "$MAIN_IFACE" ]; then
-        echo "⚠️ نتوانستم رابط شبکه اصلی رو پیدا کنم. لطفاً دستی MASQUERADE رو تنظیم کن."
-    else
-        echo "رابط اصلی اینترنت: $MAIN_IFACE"
+    if [ -n "$MAIN_IFACE" ]; then
+        echo "رابط اصلی: $MAIN_IFACE"
         iptables -t nat -A POSTROUTING -o $MAIN_IFACE -j MASQUERADE
-        # ذخیره دائمی (اختیاری - با iptables-persistent)
-        apt install iptables-persistent -y
+        apt install iptables-persistent -y -qq
         netfilter-persistent save
+    else
+        echo "⚠️ رابط شبکه اصلی پیدا نشد. NAT رو دستی تنظیم کن."
     fi
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "سرور خارج آماده است!"
-    echo "مطمئن شو پورت $wg_port/udp توی فایروال باز باشه."
+    echo "سرور خارج آماده است! پورت $wg_port/udp رو باز کن."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 
 echo ""
-echo "🎉 اسکریپت با موفقیت تمام شد!"
-echo "وضعیت تونل رو چک کن:   wg show"
-echo "لاگ‌ها:                journalctl -u wg-quick@wg0 -f"
-echo "اگر مشکلی بود بگو تا دقیق‌تر راهنمایی کنم."
-echo "موفق باشی توی گسترش بات تلگرامت!"
+echo "🎉 تمام شد!"
+echo "چک وضعیت تونل: wg show"
+echo "لاگ: journalctl -u wg-quick@wg0 -f"
+echo "اگر بعداً خواستی سیستم رو کامل آپدیت کنی: apt upgrade -y"
+echo "موفق باشی!"
